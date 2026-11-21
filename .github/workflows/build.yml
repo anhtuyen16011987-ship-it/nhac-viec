@@ -1,0 +1,23 @@
+name: Build IPA
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install xcodegen && xcodegen generate
+      - run: >
+          xcodebuild -project NhacViec.xcodeproj -scheme NhacViec
+          -sdk iphoneos -configuration Release -derivedDataPath build
+          CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=""
+      - run: |
+          mkdir Payload
+          cp -R build/Build/Products/Release-iphoneos/NhacViec.app Payload/
+          zip -r NhacViec.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NhacViec-ipa
+          path: NhacViec.ipa
