@@ -1,5 +1,6 @@
 import SwiftUI
 import Charts
+import UIKit
 import UserNotifications
 
 // MARK: - Hạng mục (đúng thứ tự các ô trên màn hình chính)
@@ -24,6 +25,12 @@ let allCats: [Cat] = [
     Cat(id: "boss", title: "Công việc\nsếp giao", icon: "person.crop.rectangle.fill", color: .orange),
     Cat(id: "training", title: "Công việc\nđào tạo", icon: "person.fill.viewfinder", color: .blue),
 ]
+
+/// Nạp ảnh PNG thường nằm trong app (không dùng Assets.xcassets)
+func bundleImage(_ name: String) -> Image {
+    if let u = UIImage(named: name) { return Image(uiImage: u) }
+    return Image(systemName: "photo")
+}
 
 func catOf(_ id: String) -> Cat { allCats.first { $0.id == id } ?? allCats[0] }
 
@@ -167,7 +174,7 @@ enum Notifier {
         let content = UNMutableNotificationContent()
         content.title = catOf(t.catID).name
         content.body = t.title
-        content.sound = Prefs.soundOn ? .default : nil
+        content.sound = Prefs.soundOn ? UNNotificationSound.default : nil
         content.interruptionLevel = (t.catID == "abnormal" || t.catID == "important") ? .timeSensitive : .active
 
         func add(_ id: String, _ dc: DateComponents, repeats: Bool) {
@@ -411,9 +418,9 @@ struct HomeView: View {
         ZStack {
             Color(red: 0.55, green: 0.85, blue: 1.0).ignoresSafeArea()
             VStack(spacing: 0) {
-                Image("poster_top").resizable().frame(height: 160)
+                bundleImage("poster_top").resizable().frame(height: 160)
                 Spacer(minLength: 0)
-                Image("poster_bottom").resizable().frame(height: 420)
+                bundleImage("poster_bottom").resizable().frame(height: 420)
             }
             .ignoresSafeArea()
 
@@ -428,7 +435,7 @@ struct HomeView: View {
 
     func poster(_ s: CGFloat) -> some View {
         ZStack(alignment: .topLeading) {
-            Image("poster").resizable().frame(width: W * s, height: H * s)
+            bundleImage("poster").resizable().frame(width: W * s, height: H * s)
 
             TimelineView(.periodic(from: .now, by: 20)) { ctx in
                 HStack(spacing: 0) {
@@ -907,10 +914,10 @@ struct SettingsView: View {
                             Label("Chọn vị trí làm việc", systemImage: "mappin.circle.fill").font(.title3.bold()).foregroundStyle(.blue)
                             Text("Chỉ nhận thông báo của khu vực bạn chọn. Hai khu vực còn lại tắt thông báo; các hạng mục khác vẫn nhắc bình thường. Bấm lại khu vực đang chọn để bỏ chọn (tất cả đều nhắc).")
                                 .font(.footnote).foregroundStyle(.secondary)
-                            ForEach(areaInfo, id: \.id) { a in
+                            ForEach(areaInfo, id: \.0) { a in
                                 Button { area = (area == a.id) ? "none" : a.id } label: {
                                     HStack(spacing: 10) {
-                                        Image(a.img).resizable().scaledToFit().frame(width: 90, height: 64)
+                                        bundleImage(a.img).resizable().scaledToFit().frame(width: 90, height: 64)
                                         VStack(alignment: .leading, spacing: 2) {
                                             Text(a.title).font(.headline).foregroundStyle(Color(red: 0.05, green: 0.2, blue: 0.6))
                                             Text(a.desc).font(.caption).foregroundStyle(.blue.opacity(0.8)).multilineTextAlignment(.leading)
