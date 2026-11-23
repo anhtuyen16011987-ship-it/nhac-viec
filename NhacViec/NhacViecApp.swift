@@ -821,7 +821,7 @@ struct EditView: View {
             Form {
                 Section("Công việc") {
                     TextField("Tên công việc", text: $task.title)
-                    TextField("Nơi / phòng (không bắt buộc)", text: Binding(get: { task.place ?? "" }, set: { task.place = $0 }))
+                    TextField("Nội dung / chi tiết công việc(không bắt buộc)", text: Binding(get: { task.place ?? "" }, set: { task.place = $0 }))
                     Picker("Hạng mục", selection: $task.catID) {
                         ForEach(allCats) { Text($0.name).tag($0.id) }
                     }
@@ -896,13 +896,13 @@ struct SettingsView: View {
     @State private var saved = false
 
     private let shiftInfo: [(String, String, String, String)] = [
-        ("day", "Ca ngày", "Chỉ thông báo từ 07:00 đến 20:00", "sun.max.fill"),
-        ("night", "Ca đêm", "Chỉ thông báo từ 19:00 đến 08:00", "moon.stars.fill"),
+        ("day", "Ca ngày", "Chỉ thông báo ca ngày", "sun.max.fill"),
+        ("night", "Ca đêm", "Chỉ thông báo ca đêm", "moon.stars.fill"),
     ]
     private let areaInfo: [(id: String, title: String, desc: String, img: String)] = [
-        ("recheck", "Khu vực Recheck", "Khu vực kiểm tra lại sản phẩm theo tiêu chuẩn", "area_recheck"),
-        ("cutting", "Khu vực Cutting", "Khu vực gia công cắt sản phẩm", "area_cutting"),
-        ("testroom", "Khu vực Test Room", "Khu vực kiểm tra chất lượng và hiệu suất sản phẩm", "area_testroom"),
+        ("recheck", "Khu vực Recheck", "Dành cho Sublearder Recheck", "area_recheck"),
+        ("cutting", "Khu vực Cutting", "Dành cho Sublearder Cutting", "area_cutting"),
+        ("testroom", "Khu vực Test Room", "Dành cho Sublearder Test Room", "area_testroom"),
     ]
 
     var body: some View {
