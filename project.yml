@@ -1,15 +1,22 @@
 name: NhacViec
 options:
-  bundleIdPrefix: com.letrungtuyen
+  bundleIdPrefix: com.smarphone1601
 targets:
   NhacViec:
     type: application
     platform: iOS
     deploymentTarget: "17.0"
     sources: [NhacViec]
+    info:
+      path: NhacViec/Info.plist
+      properties:
+        CFBundleIcons:
+          CFBundlePrimaryIcon:
+            CFBundleIconFiles:
+              - AppIcon60x60
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.letrungtuyen.nhacviec
+        PRODUCT_BUNDLE_IDENTIFIER: com.smarphone1601.nhacviec
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_CFBundleDisplayName: Nhắc việc
