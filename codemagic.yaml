@@ -1,0 +1,22 @@
+workflows:
+  ios-build:
+    name: Build IPA
+    instance_type: mac_mini_m2
+    max_build_duration: 30
+    scripts:
+      - name: Tao project
+        script: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Build
+        script: |
+          xcodebuild -project NhacViec.xcodeproj -scheme NhacViec \
+            -sdk iphoneos -configuration Release -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=""
+      - name: Dong goi IPA
+        script: |
+          mkdir Payload
+          cp -R build/Build/Products/Release-iphoneos/NhacViec.app Payload/
+          zip -r NhacViec.ipa Payload
+    artifacts:
+      - NhacViec.ipa
