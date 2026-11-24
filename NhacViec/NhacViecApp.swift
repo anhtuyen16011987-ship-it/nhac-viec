@@ -50,13 +50,19 @@ enum Prefs {
     /// "day" / "night" / "none"
     static var shift: String { UserDefaults.standard.string(forKey: "shift") ?? "none" }
 
-    /// Ca ngày: 07:00-20:00. Ca đêm: 19:00-08:00 (qua nửa đêm). m = số phút trong ngày.
+    /// Ca ngày: 07:55-19:55. Ca đêm: 19:55-07:55 hôm sau. m = số phút trong ngày.
     static func inShift(_ m: Int) -> Bool {
         switch shift {
-        case "day": return m >= 7 * 60 && m <= 20 * 60
-        case "night": return m >= 19 * 60 || m <= 8 * 60
+        case "day": return m >= 7 * 60 + 55 && m <= 19 * 60 + 55
+        case "night": return m >= 19 * 60 + 55 || m <= 7 * 60 + 55
         default: return true
         }
+    }
+    /// Ngày làm việc: ca đêm kéo dài đến 07:55 sáng hôm sau nên mốc đổi ngày là 07:55; còn lại là 00:00.
+    /// Việc đã làm trong ca đêm vì thế vẫn tính là xong đến hết ca, không hiện lại sau nửa đêm.
+    static var dayOffsetMinutes: Int { shift == "night" ? 7 * 60 + 55 : 0 }
+    static func bizDay(_ d: Date) -> Date {
+        Calendar.current.startOfDay(for: d.addingTimeInterval(-Double(dayOffsetMinutes) * 60))
     }
 
     /// Đã chọn 1 khu vực thì 2 khu vực còn lại bị tắt thông báo; các hạng mục khác vẫn nhắc bình thường.
@@ -104,16 +110,19 @@ struct TaskItem: Identifiable, Codable {
 
     var isRecurring: Bool { mode != .once && mode != .note }
 
-    var slotMinutes: [Int] {
+    /// Tất cả các lần nhắc trong ngày (có thể qua nửa đêm)
+    var allSlotMinutes: [Int] {
         guard mode == .multi else { return [] }
         let s = minutesOfDay(time), e = minutesOfDay(endTime ?? time), step = max(1, everyHours ?? 1) * 60
-        guard e >= s else { return [s] }
-        return Array(stride(from: s, through: e, by: step).prefix(24))
+        let e2 = e >= s ? e : e + 1440
+        return Array(stride(from: s, through: e2, by: step).prefix(24)).map { $0 % 1440 }
     }
+    /// Chỉ các lần nằm trong ca đã chọn: làm đủ các lần này là xong việc, không phải làm tiếp ở ca còn lại
+    var slotMinutes: [Int] { allSlotMinutes.filter { Prefs.inShift($0) } }
     var dueMinutes: [Int] { mode == .note ? [] : (mode == .multi ? slotMinutes : [minutesOfDay(time)]) }
 
     var doneToday: Int {
-        guard let d = slotsDay, Calendar.current.isDateInToday(d) else { return 0 }
+        guard let d = slotsDay, Prefs.bizDay(d) == Prefs.bizDay(Date()) else { return 0 }
         return slotsDone ?? 0
     }
 
@@ -121,11 +130,12 @@ struct TaskItem: Identifiable, Codable {
     var isHidden: Bool {
         guard let d = doneAt else { return false }
         let c = Calendar.current
+        let bd = Prefs.bizDay(d), bn = Prefs.bizDay(Date())
         switch mode {
         case .once, .note: return true
-        case .daily, .weekly, .multi: return c.isDateInToday(d)
-        case .monthly: return c.isDate(d, equalTo: Date(), toGranularity: .month)
-        case .yearly: return c.isDate(d, equalTo: Date(), toGranularity: .year)
+        case .daily, .weekly, .multi: return bd == bn
+        case .monthly: return c.isDate(bd, equalTo: bn, toGranularity: .month)
+        case .yearly: return c.isDate(bd, equalTo: bn, toGranularity: .year)
         }
     }
 
@@ -133,8 +143,9 @@ struct TaskItem: Identifiable, Codable {
         let c = Calendar.current
         switch mode {
         case .note: return false
-        case .once: return c.isDate(time, inSameDayAs: d)
-        case .daily, .multi: return true
+        case .once: return Prefs.bizDay(time) == c.startOfDay(for: d)
+        case .daily: return true
+        case .multi: return !slotMinutes.isEmpty
         case .weekly: return weekdays.contains(c.component(.weekday, from: d))
         case .monthly: return c.component(.day, from: d) == monthDay
         case .yearly:
@@ -157,7 +168,7 @@ struct TaskItem: Identifiable, Codable {
         case .monthly: s = "\(t) · Ngày \(monthDay)"
         case .multi:
             let ts = slotMinutes.map { String(format: "%02d:%02d", $0 / 60, $0 % 60) }
-            s = "\(ts.first ?? "") – \(ts.last ?? "") · mỗi \(everyHours ?? 1)h · \(doneToday)/\(ts.count)"
+            s = ts.isEmpty ? "Không có lần nào trong ca đã chọn" : "\(ts.first ?? "") – \(ts.last ?? "") · mỗi \(everyHours ?? 1)h · \(doneToday)/\(ts.count)"
         }
         if let p = place, !p.isEmpty { s += " • " + p }
         return s
@@ -198,6 +209,9 @@ enum Notifier {
                                         trigger: UNCalendarNotificationTrigger(dateMatching: dc, repeats: repeats)))
         }
         let hm = Calendar.current.dateComponents([.hour, .minute], from: t.time)
+        // Tính theo ca: ca đêm đổi ngày lúc 07:55, nên giờ 00:00-07:55 thuộc về ngày làm việc hôm trước
+        // và thông báo thực tế rơi vào ngày lịch kế tiếp (off = 1).
+        let off = (Prefs.shift == "night" && minutesOfDay(t.time) <= 7 * 60 + 55) ? 1 : 0
         switch t.mode {
         case .once:
             if t.doneAt == nil, t.time > Date() {
@@ -206,11 +220,15 @@ enum Notifier {
         case .note: break           // ghi chú: không thông báo
         case .daily: add("\(t.id)-daily", hm, repeats: true)
         case .weekly:
-            for wd in t.weekdays { var dc = hm; dc.weekday = wd; add("\(t.id)-w\(wd)", dc, repeats: true) }
+            for wd in t.weekdays { var dc = hm; dc.weekday = (wd - 1 + off) % 7 + 1; add("\(t.id)-w\(wd)", dc, repeats: true) }
         case .monthly:
-            var dc = hm; dc.day = t.monthDay; add("\(t.id)-month", dc, repeats: true)
+            var dc = hm; dc.day = t.monthDay + off > 31 ? 1 : t.monthDay + off; add("\(t.id)-month", dc, repeats: true)
         case .yearly:
-            add("\(t.id)-year", Calendar.current.dateComponents([.month, .day, .hour, .minute], from: t.time), repeats: true)
+            var base = Calendar.current.dateComponents([.month, .day], from: t.time); base.year = 2024   // năm nhuận để giữ ngày 29/2
+            let fire = Calendar.current.date(from: base).flatMap { Calendar.current.date(byAdding: .day, value: off, to: $0) } ?? t.time
+            var dc = Calendar.current.dateComponents([.month, .day], from: fire)
+            dc.hour = hm.hour; dc.minute = hm.minute
+            add("\(t.id)-year", dc, repeats: true)
         case .multi:
             for (i, m) in t.slotMinutes.enumerated() {
                 var dc = DateComponents(); dc.hour = m / 60; dc.minute = m % 60
@@ -237,10 +255,10 @@ final class Store: ObservableObject {
         if let d = try? JSONEncoder().encode(log) { u.set(d, forKey: "log.v3") }
     }
 
-    func todayPending() -> [TaskItem] { tasks.filter { !$0.isHidden && $0.occurs(on: Date()) } }
+    func todayPending() -> [TaskItem] { tasks.filter { !$0.isHidden && $0.occurs(on: Prefs.bizDay(Date())) } }
     /// Số đỏ trên ô: việc đến hạn hôm nay + ghi chú chưa xong của hạng mục đó
     func badgeCount(_ catID: String) -> Int {
-        tasks.filter { $0.catID == catID && !$0.isHidden && ($0.mode == .note || $0.occurs(on: Date())) }.count
+        tasks.filter { $0.catID == catID && !$0.isHidden && ($0.mode == .note || $0.occurs(on: Prefs.bizDay(Date()))) }.count
     }
     func upsert(_ t: TaskItem) {
         if let i = tasks.firstIndex(where: { $0.id == t.id }) { tasks[i] = t } else { tasks.append(t) }
@@ -609,7 +627,7 @@ struct TaskListView: View {
     }
 
     private var sections: [Sec] {
-        let now = Date(), tom = Calendar.current.date(byAdding: .day, value: 1, to: now) ?? now
+        let now = Prefs.bizDay(Date()), tom = Calendar.current.date(byAdding: .day, value: 1, to: now) ?? now
         let all = store.tasks.filter(match)
         let today = all.filter { !$0.isHidden && $0.occurs(on: now) }.sorted(by: byTime)
         let notes = all.filter { $0.mode == .note && !$0.isHidden }.sorted { $0.time > $1.time }
@@ -821,7 +839,7 @@ struct EditView: View {
             Form {
                 Section("Công việc") {
                     TextField("Tên công việc", text: $task.title)
-                    TextField("Nội dung / chi tiết công việc(không bắt buộc)", text: Binding(get: { task.place ?? "" }, set: { task.place = $0 }))
+                    TextField("Nơi / phòng (không bắt buộc)", text: Binding(get: { task.place ?? "" }, set: { task.place = $0 }))
                     Picker("Hạng mục", selection: $task.catID) {
                         ForEach(allCats) { Text($0.name).tag($0.id) }
                     }
@@ -854,7 +872,7 @@ struct EditView: View {
                         DatePicker("Đến giờ", selection: Binding(get: { task.endTime ?? task.time }, set: { task.endTime = $0 }),
                                    displayedComponents: [.hourAndMinute])
                         Stepper("Mỗi \(task.everyHours ?? 2) giờ", value: Binding(get: { task.everyHours ?? 2 }, set: { task.everyHours = $0 }), in: 1...12)
-                        Text("Nhắc lúc: " + task.slotMinutes.map { String(format: "%02d:%02d", $0 / 60, $0 % 60) }.joined(separator: ", "))
+                        Text("Nhắc lúc: " + task.allSlotMinutes.map { String(format: "%02d:%02d", $0 / 60, $0 % 60) }.joined(separator: ", "))
                             .font(.footnote).foregroundStyle(.secondary)
                     }
                 }
@@ -896,13 +914,13 @@ struct SettingsView: View {
     @State private var saved = false
 
     private let shiftInfo: [(String, String, String, String)] = [
-        ("day", "Ca ngày", "Chỉ thông báo ca ngày", "sun.max.fill"),
-        ("night", "Ca đêm", "Chỉ thông báo ca đêm", "moon.stars.fill"),
+        ("day", "Ca ngày", "Chỉ thông báo từ 07:55 đến 19:55", "sun.max.fill"),
+        ("night", "Ca đêm", "Chỉ thông báo từ 19:55 đến 07:55 hôm sau", "moon.stars.fill"),
     ]
     private let areaInfo: [(id: String, title: String, desc: String, img: String)] = [
-        ("recheck", "Khu vực Recheck", "Dành cho Sublearder Recheck", "area_recheck"),
-        ("cutting", "Khu vực Cutting", "Dành cho Sublearder Cutting", "area_cutting"),
-        ("testroom", "Khu vực Test Room", "Dành cho Sublearder Test Room", "area_testroom"),
+        ("recheck", "Khu vực Recheck", "Khu vực kiểm tra lại sản phẩm theo tiêu chuẩn", "area_recheck"),
+        ("cutting", "Khu vực Cutting", "Khu vực gia công cắt sản phẩm", "area_cutting"),
+        ("testroom", "Khu vực Test Room", "Khu vực kiểm tra chất lượng và hiệu suất sản phẩm", "area_testroom"),
     ]
 
     var body: some View {
@@ -912,45 +930,8 @@ struct SettingsView: View {
                 HeaderBar(title: "Cài đặt", subtitle: "Tùy chỉnh ứng dụng theo nhu cầu của bạn")
                 ScrollView {
                     VStack(spacing: 12) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Label("Thông báo", systemImage: "bell.fill").font(.title3.bold()).foregroundStyle(.blue)
-                            toggleRow("Bật thông báo", "Nhận thông báo về công việc, nhắc nhở và các thông tin quan trọng", $notifOn)
-                            Divider()
-                            toggleRow("Âm thanh thông báo", "Phát âm thanh khi có thông báo", $soundOn)
-                            Divider()
-                            toggleRow("Rung khi có thông báo", "Rung thiết bị khi có thông báo (iPhone quyết định theo cài đặt hệ thống)", $vibrateOn)
-                        }
-                        .padding(14).background(.white.opacity(0.92), in: RoundedRectangle(cornerRadius: 20))
-
-                        VStack(alignment: .leading, spacing: 8) {
-                            Label("Chọn vị trí làm việc", systemImage: "mappin.circle.fill").font(.title3.bold()).foregroundStyle(.blue)
-                            Text("Chỉ nhận thông báo của khu vực bạn chọn. Hai khu vực còn lại tắt thông báo; các hạng mục khác vẫn nhắc bình thường. Bấm lại khu vực đang chọn để bỏ chọn (tất cả đều nhắc).")
-                                .font(.footnote).foregroundStyle(.secondary)
-                            ForEach(areaInfo, id: \.0) { a in
-                                Button { area = (area == a.id) ? "none" : a.id } label: {
-                                    HStack(spacing: 10) {
-                                        bundleImage(a.img).resizable().scaledToFit().frame(width: 90, height: 64)
-                                        VStack(alignment: .leading, spacing: 2) {
-                                            Text(a.title).font(.headline).foregroundStyle(Color(red: 0.05, green: 0.2, blue: 0.6))
-                                            Text(a.desc).font(.caption).foregroundStyle(.blue.opacity(0.8)).multilineTextAlignment(.leading)
-                                        }
-                                        Spacer()
-                                        Image(systemName: area == a.id ? "largecircle.fill.circle" : "circle")
-                                            .font(.title2).foregroundStyle(.blue)
-                                    }
-                                    .padding(8)
-                                    .background(RoundedRectangle(cornerRadius: 14).fill(Color(red: 0.93, green: 0.96, blue: 1.0)))
-                                    .overlay(RoundedRectangle(cornerRadius: 14).stroke(area == a.id ? Color.blue : .clear, lineWidth: 2))
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                        .padding(14).background(.white.opacity(0.92), in: RoundedRectangle(cornerRadius: 20))
-
                         VStack(alignment: .leading, spacing: 8) {
                             Label("Ca làm việc", systemImage: "clock.badge.checkmark.fill").font(.title3.bold()).foregroundStyle(.blue)
-                            Text("Chỉ nhận thông báo trong khung giờ của ca. Việc có giờ nhắc ngoài khung giờ sẽ không thông báo. Bấm lại ca đang chọn để bỏ chọn (nhận thông báo cả ngày).")
-                                .font(.footnote).foregroundStyle(.secondary)
                             ForEach(shiftInfo, id: \.0) { sh in
                                 Button { shift = (shift == sh.0) ? "none" : sh.0 } label: {
                                     HStack(spacing: 10) {
@@ -969,6 +950,38 @@ struct SettingsView: View {
                                 }
                                 .buttonStyle(.plain)
                             }
+                        }
+                        .padding(14).background(.white.opacity(0.92), in: RoundedRectangle(cornerRadius: 20))
+
+                        VStack(alignment: .leading, spacing: 8) {
+                            Label("Chọn vị trí làm việc", systemImage: "mappin.circle.fill").font(.title3.bold()).foregroundStyle(.blue)
+                            ForEach(areaInfo, id: \.0) { a in
+                                Button { area = (area == a.id) ? "none" : a.id } label: {
+                                    HStack(spacing: 10) {
+                                        bundleImage(a.img).resizable().scaledToFit().frame(width: 90, height: 64)
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(a.title).font(.headline).foregroundStyle(Color(red: 0.05, green: 0.2, blue: 0.6))
+                                        }
+                                        Spacer()
+                                        Image(systemName: area == a.id ? "largecircle.fill.circle" : "circle")
+                                            .font(.title2).foregroundStyle(.blue)
+                                    }
+                                    .padding(8)
+                                    .background(RoundedRectangle(cornerRadius: 14).fill(Color(red: 0.93, green: 0.96, blue: 1.0)))
+                                    .overlay(RoundedRectangle(cornerRadius: 14).stroke(area == a.id ? Color.blue : .clear, lineWidth: 2))
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .padding(14).background(.white.opacity(0.92), in: RoundedRectangle(cornerRadius: 20))
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Label("Thông báo", systemImage: "bell.fill").font(.title3.bold()).foregroundStyle(.blue)
+                            toggleRow("Bật thông báo", "", $notifOn)
+                            Divider()
+                            toggleRow("Âm thanh thông báo", "", $soundOn)
+                            Divider()
+                            toggleRow("Rung khi có thông báo", "", $vibrateOn)
                         }
                         .padding(14).background(.white.opacity(0.92), in: RoundedRectangle(cornerRadius: 20))
 
@@ -992,7 +1005,7 @@ struct SettingsView: View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
                 Text(t).font(.headline)
-                Text(d).font(.caption).foregroundStyle(.secondary)
+                if !d.isEmpty { Text(d).font(.caption).foregroundStyle(.secondary) }
             }
             Spacer()
             Toggle("", isOn: b).labelsHidden().tint(.blue)
@@ -1004,7 +1017,8 @@ struct SettingsView: View {
         let u = UserDefaults.standard
         u.set(notifOn, forKey: "notifOn"); u.set(soundOn, forKey: "soundOn")
         u.set(vibrateOn, forKey: "vibrateOn"); u.set(area, forKey: "area"); u.set(shift, forKey: "shift")
-        store.rescheduleAll()          // đặt lại toàn bộ thông báo theo khu vực vừa chọn
+        store.rescheduleAll()          // đặt lại toàn bộ thông báo theo ca và khu vực vừa chọn
+        store.objectWillChange.send()
         saved = true
     }
 }
